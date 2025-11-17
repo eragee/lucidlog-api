@@ -105,8 +105,8 @@ def explain_log():
                 max_output_tokens=512,
                 response_mime_type="application/json",
                 response_schema=log_explainer_schema,
+                system_instruction=LOG_EXPLAINER_INSTRUCTIONS,
             ),
-            system_instruction=LOG_EXPLAINER_INSTRUCTIONS,
         )
 
         text = response.text or ""
@@ -126,6 +126,7 @@ def explain_log():
 
     except Exception as e:
         return rest_error(f"Gemini API error: {e}")
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
