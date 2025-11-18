@@ -8,9 +8,8 @@ from google import genai
 from google.genai import types
 
 app = Flask(__name__)
-app.config["JSON_SORT_KEYS"] = False
+app.config["JSON_SORT_KEYS"] = False  # Keep "status" before "result"
 
-# Gemini client (Developer API using API key from env)
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")
 )
@@ -37,41 +36,9 @@ Output ONLY JSON with the following schema:
   "raw_log": string
 }
 Do not add any extra fields.
-If you truly cannot interpret the log, say so in "summary" and leave the rest minimal.
+If the log cannot be interpreted, state that in "summary" and keep other fields minimal.
 """
 
-log_explainer_schema = types.Schema(
-    type=types.Type.OBJECT,
-    required=["summary", "severity", "raw_log"],
-    properties={
-        "summary": types.Schema(
-            type=types.Type.STRING,
-            description="1–3 sentence human explanation of the log entry."
-        ),
-        "severity": types.Schema(
-            type=types.Type.STRING,
-            description="Log severity level (e.g. DEBUG, INFO, WARN, ERROR, FATAL)."
-        ),
-        "component": types.Schema(
-            type=types.Type.STRING,
-            description="Service or component emitting the log.",
-        ),
-        "probable_causes": types.Schema(
-            type=types.Type.ARRAY,
-            items=types.Schema(type=types.Type.STRING),
-            description="List of likely causes."
-        ),
-        "recommended_actions": types.Schema(
-            type=types.Type.ARRAY,
-            items=types.Schema(type=types.Type.STRING),
-            description="Suggested next steps."
-        ),
-        "raw_log": types.Schema(
-            type=types.Type.STRING,
-            description="The original log entry."
-        ),
-    },
-)
 
 def build_prompt(log_entry: str, context: dict | None) -> str:
     prompt = "Explain this log entry for an engineer.\n\n"
@@ -82,8 +49,51 @@ def build_prompt(log_entry: str, context: dict | None) -> str:
         prompt += "ADDITIONAL CONTEXT (JSON):\n"
         prompt += json.dumps(context, indent=2)
         prompt += "\n\n"
-    prompt += "Remember to respond ONLY with JSON as specified."
+    prompt += "Return ONLY JSON as specified."
     return prompt
+
+
+def parse_json_from_response(text: str, log_entry: str) -> dict:
+    """
+    Attempts to parse a JSON object from the model output.
+    Handles responses wrapped in ```json code fences.
+    """
+    if not text:
+        return {
+            "summary": "Model returned an empty response.",
+            "severity": "INFO",
+            "component": None,
+            "probable_causes": [],
+            "recommended_actions": [],
+            "raw_log": log_entry,
+        }
+
+    cleaned = text.strip()
+
+    # Strip ```json ... ``` or ``` ... ``` fences if present
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2:
+            lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+
+    try:
+        obj = json.loads(cleaned)
+    except json.JSONDecodeError:
+        obj = {
+            "summary": cleaned,
+            "severity": "INFO",
+            "component": None,
+            "probable_causes": [],
+            "recommended_actions": [],
+            "raw_log": log_entry,
+        }
+
+    obj.setdefault("raw_log", log_entry)
+    return obj
+
 
 @app.route("/explain-log", methods=["POST"])
 def explain_log():
@@ -103,28 +113,17 @@ def explain_log():
             config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=512,
-                response_mime_type="application/json",
-                response_schema=log_explainer_schema,
                 system_instruction=LOG_EXPLAINER_INSTRUCTIONS,
             ),
         )
 
         text = response.text or ""
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = {
-                "summary": text.strip() or "Model returned an empty response.",
-                "severity": "INFO",
-                "component": None,
-                "probable_causes": [],
-                "recommended_actions": [],
-                "raw_log": log_entry,
-            }
+        parsed = parse_json_from_response(text, log_entry)
 
         return rest_response(parsed)
 
     except Exception as e:
+        # Production deployments may log this exception server-side.
         return rest_error(f"Gemini API error: {e}")
 
 
