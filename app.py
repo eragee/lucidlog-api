@@ -21,7 +21,7 @@ Given:
 - A single log line (possibly JSON or plain text)
 - Optional context metadata
 
-You must:
+Goals:
 - Parse or infer: timestamp, severity, component/service, and main event
 - Explain in plain English what happened
 - Infer likely causes and recommended next troubleshooting steps
@@ -53,9 +53,29 @@ def build_prompt(log_entry: str, context: dict | None) -> str:
     return prompt
 
 
+def extract_text_from_response(response) -> str:
+    """
+    Extracts concatenated text from all text parts in all candidates.
+    Avoids using response.text directly to work around SDK issues.
+    """
+    texts = []
+    try:
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            for part in getattr(content, "parts", []) or []:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    texts.append(part_text)
+    except Exception:
+        return ""
+    return "\n".join(texts).strip()
+
+
 def parse_json_from_response(text: str, log_entry: str) -> dict:
     """
-    Attempts to parse a JSON object from the model output.
+    Attempts to parse a JSON object from model output.
     Handles responses wrapped in ```json code fences.
     """
     if not text:
@@ -117,13 +137,12 @@ def explain_log():
             ),
         )
 
-        text = response.text or ""
-        parsed = parse_json_from_response(text, log_entry)
+        raw_text = extract_text_from_response(response)
+        parsed = parse_json_from_response(raw_text, log_entry)
 
         return rest_response(parsed)
 
     except Exception as e:
-        # Production deployments may log this exception server-side.
         return rest_error(f"Gemini API error: {e}")
 
 
