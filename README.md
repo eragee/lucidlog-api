@@ -33,7 +33,7 @@ To generate one:
 2. Select **API Keys** on the left-hand side.  
 3. Click **Create API Key**.  
 4. Choose **Developer API**.  
-5. Copy your key.
+5. Copy the key.
 
 This key is private—**do not commit it to GitHub**.
 
@@ -99,41 +99,94 @@ http://localhost:8080
 
 ### `POST /explain-log`
 
-#### Example Request
+The payload **must include**:
+
+- `log`: A single log line in plain text.
+
+The payload **may optionally include**:
+
+- `context`: Additional metadata (host, pod, cluster, trace ID, region, etc.)  
+  This information helps Gemini produce more accurate and environment-aware explanations but is not required.
+
+If `context` is omitted, the service still functions normally.
+
+---
+
+### Example Without Context
 
 ```json
 {
-  "log": "2025-11-14T01:23:45Z ERROR auth-service Failed login for user bob (401)",
+  "log": "2025-11-14T03:21:15Z ERROR auth-service Failed login for user alice (401)"
+}
+```
+
+### Example With Context
+
+```json
+{
+  "log": "2025-11-14T03:21:15Z ERROR auth-service Failed login for user alice (401)",
   "context": {
     "host": "node-03",
-    "cluster": "prod-gke-1"
+    "cluster": "prod-gke-1",
+    "pod": "auth-7d4f9c6d8b-xyz"
   }
 }
 ```
 
-#### Example Response
+---
+
+### Example Response
 
 ```json
 {
   "status": "OK",
   "result": {
-    "summary": "The auth-service rejected a login attempt for the user 'bob' with HTTP 401.",
+    "summary": "The 'auth-service' rejected a login attempt from user 'alice' because the provided credentials were unauthorized (HTTP 401).",
     "severity": "ERROR",
     "component": "auth-service",
     "probable_causes": [
       "Incorrect credentials",
       "Account lockout",
-      "Outdated cached password"
+      "Malformed or expired token"
     ],
     "recommended_actions": [
-      "Verify the user's password",
-      "Check authentication service metrics",
-      "Investigate possible brute-force attempts"
+      "Verify credentials",
+      "Check account status",
+      "Investigate potential auth token problems"
     ],
-    "raw_log": "2025-11-14T01:23:45Z ERROR auth-service Failed login for user bob (401)"
+    "raw_log": "2025-11-14T03:21:15Z ERROR auth-service Failed login for user alice (401)"
   }
 }
 ```
+
+---
+
+## Understanding the `context` Field
+
+The `context` field provides additional signals that help Gemini produce richer, more accurate explanations. Examples of useful metadata:
+
+- Host or node  
+- Kubernetes pod name  
+- Cluster or namespace  
+- Region or deployment environment  
+- Trace or request ID  
+- Application version
+
+This information is optional. When supplied, it improves the model’s ability to reason about the environment where the log was produced.
+
+Example:
+
+```json
+{
+  "context": {
+    "host": "node-17",
+    "cluster": "prod-gke-1",
+    "trace_id": "df102abf34"
+  }
+}
+```
+
+If omitted, the model relies solely on the log line to generate the explanation.
 
 ---
 
