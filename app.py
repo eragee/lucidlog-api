@@ -5,11 +5,12 @@ from flask import Flask, request
 from helpers import rest_response, rest_error
 
 from google import genai
-from google.genai import types
 
 app = Flask(__name__)
-app.config["JSON_SORT_KEYS"] = False  # Keep "status" before "result"
+app.config["JSON_SORT_KEYS"] = False
 
+# Client for Gemini Developer API.
+# GEMINI_API_KEY is expected in the environment.
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")
 )
@@ -41,45 +42,61 @@ If the log cannot be interpreted, state that in "summary" and keep other fields 
 
 
 def build_prompt(log_entry: str, context: dict | None) -> str:
-    prompt = "Explain this log entry for an engineer.\n\n"
-    prompt += "LOG ENTRY:\n"
-    prompt += log_entry
-    prompt += "\n\n"
+    parts = [
+        LOG_EXPLAINER_INSTRUCTIONS.strip(),
+        "",
+        "LOG ENTRY:",
+        log_entry,
+    ]
+
     if context:
-        prompt += "ADDITIONAL CONTEXT (JSON):\n"
-        prompt += json.dumps(context, indent=2)
-        prompt += "\n\n"
-    prompt += "Return ONLY JSON as specified."
-    return prompt
+        parts.extend(
+            [
+                "",
+                "ADDITIONAL CONTEXT (JSON):",
+                json.dumps(context, indent=2),
+            ]
+        )
+
+    parts.extend(
+        [
+            "",
+            "Return ONLY JSON as specified above.",
+        ]
+    )
+
+    return "\n".join(parts)
 
 
 def extract_text_from_response(response) -> str:
     """
-    Extracts concatenated text from all text parts in all candidates.
-    Avoids using response.text directly to work around SDK issues.
+    Extracts text from the response object.
+    Uses response.text first, then candidate parts as a fallback.
     """
+    if getattr(response, "text", None):
+        return response.text.strip()
+
     texts = []
-    try:
-        for candidate in getattr(response, "candidates", []) or []:
-            content = getattr(candidate, "content", None)
-            if not content:
-                continue
-            for part in getattr(content, "parts", []) or []:
-                part_text = getattr(part, "text", None)
-                if part_text:
-                    texts.append(part_text)
-    except Exception:
-        return ""
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        if not content:
+            continue
+        for part in getattr(content, "parts", []) or []:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                texts.append(part_text)
+
     return "\n".join(texts).strip()
 
 
-def parse_json_from_response(text: str, log_entry: str) -> dict:
+def parse_json_from_response(text: str, log_entry: str, debug_meta: dict | None = None) -> dict:
     """
     Attempts to parse a JSON object from model output.
     Handles responses wrapped in ```json code fences.
+    If parsing fails, returns a fallback structure with the raw text in the summary.
     """
     if not text:
-        return {
+        result = {
             "summary": "Model returned an empty response.",
             "severity": "INFO",
             "component": None,
@@ -87,6 +104,9 @@ def parse_json_from_response(text: str, log_entry: str) -> dict:
             "recommended_actions": [],
             "raw_log": log_entry,
         }
+        if debug_meta:
+            result["_debug"] = debug_meta
+        return result
 
     cleaned = text.strip()
 
@@ -112,6 +132,11 @@ def parse_json_from_response(text: str, log_entry: str) -> dict:
         }
 
     obj.setdefault("raw_log", log_entry)
+
+    if debug_meta is not None:
+        # Attach debug only when present and not already in the object.
+        obj.setdefault("_debug", debug_meta)
+
     return obj
 
 
@@ -130,15 +155,19 @@ def explain_log():
         response = client.models.generate_content(
             model="gemini-2.5-pro",
             contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=512,
-                system_instruction=LOG_EXPLAINER_INSTRUCTIONS,
-            ),
         )
 
         raw_text = extract_text_from_response(response)
-        parsed = parse_json_from_response(raw_text, log_entry)
+
+        # Optional debug information when there is no text.
+        debug_meta = None
+        if not raw_text:
+            debug_meta = {
+                "has_candidates": bool(getattr(response, "candidates", None)),
+                "prompt_feedback": getattr(response, "prompt_feedback", None),
+            }
+
+        parsed = parse_json_from_response(raw_text, log_entry, debug_meta=debug_meta)
 
         return rest_response(parsed)
 
