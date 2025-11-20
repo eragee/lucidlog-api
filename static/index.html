@@ -65,6 +65,7 @@
         gap: 1rem;
         margin-top: 0.5rem;
         margin-bottom: 1rem;
+        flex-wrap: wrap;
       }
 
       button {
@@ -89,9 +90,81 @@
 
       .error {
         color: #b00020;
+        margin-top: 0.5rem;
+        font-size: 0.95rem;
       }
 
-      pre {
+      .result-card {
+        margin-top: 1.5rem;
+        padding: 1rem 1.25rem;
+        border-radius: 10px;
+        border: 1px solid #e5e7eb;
+        background: #f9fafb;
+      }
+
+      .result-card h2 {
+        margin-top: 0;
+        margin-bottom: 0.75rem;
+      }
+
+      .result-section {
+        margin-bottom: 0.85rem;
+      }
+
+      .result-section h3 {
+        margin: 0 0 0.25rem 0;
+        font-size: 1rem;
+      }
+
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.15rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        background: #e5e7eb;
+        color: #111827;
+      }
+
+      .badge-severity-ERROR {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .badge-severity-WARN {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .badge-severity-INFO {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+
+      .mono-block {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+        font-size: 0.88rem;
+        background: #111827;
+        color: #e5e7eb;
+        padding: 0.55rem 0.65rem;
+        border-radius: 6px;
+        overflow-x: auto;
+        margin: 0;
+      }
+
+      ul {
+        margin: 0.25rem 0 0.25rem 1.2rem;
+      }
+
+      pre.raw-json {
         background: #111827;
         color: #e5e7eb;
         padding: 0.75rem;
@@ -106,7 +179,6 @@
     <div id="root"></div>
 
     <script type="text/babel">
-      // Updated for same-origin requests when UI and API are in the same container
       const API_URL = "/explain-log";
 
       function App() {
@@ -126,7 +198,7 @@
             return;
           }
 
-          let payload = { log: logText.trim() };
+          const payload = { log: logText.trim() };
 
           if (contextText.trim()) {
             try {
@@ -157,12 +229,92 @@
           }
         };
 
+        const renderResult = () => {
+          if (!responseData) {
+            return null;
+          }
+
+          const isOk = responseData.status === "OK" && responseData.result;
+          if (!isOk) {
+            return (
+              <div className="result-card">
+                <h2>Raw Response</h2>
+                <pre className="raw-json">
+                  {JSON.stringify(responseData, null, 2)}
+                </pre>
+              </div>
+            );
+          }
+
+          const r = responseData.result || {};
+          const severity = r.severity || "UNKNOWN";
+          const component = r.component || "Unknown component";
+          const summary = r.summary || "";
+          const probableCauses = Array.isArray(r.probable_causes)
+            ? r.probable_causes
+            : [];
+          const recommendedActions = Array.isArray(r.recommended_actions)
+            ? r.recommended_actions
+            : [];
+          const rawLog = r.raw_log || "";
+
+          const severityClass =
+            "badge badge-severity-" + (severity || "").toUpperCase();
+
+          return (
+            <div className="result-card">
+              <h2>Explanation</h2>
+
+              <div className="badge-row">
+                <span className={severityClass}>Severity: {severity}</span>
+                <span className="badge">Component: {component}</span>
+              </div>
+
+              {summary && (
+                <div className="result-section">
+                  <h3>Summary</h3>
+                  <p>{summary}</p>
+                </div>
+              )}
+
+              {rawLog && (
+                <div className="result-section">
+                  <h3>Raw log</h3>
+                  <p className="mono-block">{rawLog}</p>
+                </div>
+              )}
+
+              {probableCauses.length > 0 && (
+                <div className="result-section">
+                  <h3>Probable causes</h3>
+                  <ul>
+                    {probableCauses.map((item, idx) => (
+                      <li key={idx}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {recommendedActions.length > 0 && (
+                <div className="result-section">
+                  <h3>Recommended actions</h3>
+                  <ul>
+                    {recommendedActions.map((item, idx) => (
+                      <li key={idx}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          );
+        };
+
         return (
           <div className="app-container">
             <h1>lucidlog-api Tester</h1>
             <p>
               Sends a log entry and optional context to the lucidlog-api backend
-              and displays the JSON explanation response.
+              and formats the explanation response.
             </p>
 
             <form onSubmit={handleSubmit}>
@@ -192,19 +344,14 @@
                   {loading ? "Explaining..." : "Explain Log"}
                 </button>
                 <div className="status">
-                  Using endpoint: <code>{API_URL}</code>
+                  Endpoint: <code>{API_URL}</code>
                 </div>
               </div>
             </form>
 
             {error && <div className="error">{error}</div>}
 
-            {responseData && (
-              <div>
-                <h2>Response</h2>
-                <pre>{JSON.stringify(responseData, null, 2)}</pre>
-              </div>
-            )}
+            {renderResult()}
           </div>
         );
       }
