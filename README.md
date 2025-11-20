@@ -1,25 +1,37 @@
 # lucidlog-api
 
-lucidlog-api is a lightweight Flask-based web service that transforms raw log entries into clear, structured explanations using **Gemini 2.5 Pro**. It converts cryptic logs into human-readable summaries, likely causes, severity, and recommended next steps—delivered in strictly formatted JSON.
+lucidlog-api is a lightweight Flask-based web service that converts raw log entries into structured, human-readable explanations using **Gemini 2.5 Pro**.  
+A simple in-browser UI is included and served directly by Flask from the `static/` directory.
 
 ---
 
 ## Features
 
-- Uses **Gemini Pro** for high-quality reasoning.
-- Accepts single log entries plus optional context.
-- Returns clean, predictable JSON (no Markdown interpretation required).
-- Deployable via Docker, Cloud Run, or any Python environment.
-- API keys are injected at runtime—never stored in the repo.
+- Explains single log lines using Gemini Pro
+- Optional contextual metadata to improve explanation accuracy
+- Predictable JSON output (no Markdown)
+- Included test UI served from the same Cloud Run service
+- Single-container deployment (Flask + static UI)
+- API key stored securely via Cloud Run or Secret Manager
 
 ---
 
-## Requirements
+## Project Structure
 
-- Python 3.12+
-- A **Gemini API key**
-- `pip` for installing dependencies
-- (Optional) Docker for container builds
+```
+.
+├── app.py
+├── helpers.py
+├── requirements.txt
+├── Dockerfile
+└── static/
+    └── index.html     ← Test UI (React SPA)
+```
+
+Flask serves both API endpoints and the UI:
+
+- `/` → test UI  
+- `/explain-log` → JSON API endpoint  
 
 ---
 
@@ -27,21 +39,18 @@ lucidlog-api is a lightweight Flask-based web service that transforms raw log en
 
 A Gemini API key is required.
 
-To generate one:
-
 1. Go to **Google AI Studio**: https://aistudio.google.com  
-2. Select **API Keys** on the left-hand side.  
-3. Click **Create API Key**.  
-4. Choose **Developer API**.  
-5. Copy the key.
+2. Select **API Keys**  
+3. Choose **Create API Key → Developer API**  
+4. Copy the key
 
-This key is private—**do not commit it to GitHub**.
+Do not store this key in version control.
 
 ---
 
 ## Setting the API Key
 
-The environment variable `GEMINI_API_KEY` must be set before running the service.
+Set the environment variable `GEMINI_API_KEY` before running the service.
 
 ### macOS / Linux
 
@@ -64,7 +73,7 @@ docker run -e GEMINI_API_KEY="your-key" -p 8080:8080 lucidlog-api
 ### Cloud Run (simple env var)
 
 ```bash
-gcloud run deploy lucidlog-api   --image gcr.io/PROJECT_ID/lucidlog-api   --region=us-central1   --set-env-vars=GEMINI_API_KEY=your-key-here
+gcloud run deploy lucidlog-api   --image gcr.io/PROJECT_ID/lucidlog-api   --region us-west1   --set-env-vars GEMINI_API_KEY=your-key-here
 ```
 
 ### Cloud Run (recommended: Secret Manager)
@@ -74,7 +83,7 @@ gcloud secrets create gemini-api-key --data-file=- <<EOF
 your-key-here
 EOF
 
-gcloud run deploy lucidlog-api   --image gcr.io/PROJECT_ID/lucidlog-api   --region=us-central1   --set-secrets=GEMINI_API_KEY=gemini-api-key:latest
+gcloud run deploy lucidlog-api   --image gcr.io/PROJECT_ID/lucidlog-api   --region us-west1   --set-secrets=GEMINI_API_KEY=gemini-api-key:latest
 ```
 
 ---
@@ -87,7 +96,7 @@ export GEMINI_API_KEY="your-real-key"
 python app.py
 ```
 
-The service runs at:
+Open the built-in UI at:
 
 ```
 http://localhost:8080
@@ -97,22 +106,17 @@ http://localhost:8080
 
 ## API Usage
 
-### `POST /explain-log`
+### POST /explain-log
 
-The payload **must include**:
+The payload must include:
 
-- `log`: A single log line in plain text.
+- `log`: A single log line in plain text
 
-The payload **may optionally include**:
+The payload may optionally include:
 
-- `context`: Additional metadata (host, pod, cluster, trace ID, region, etc.)  
-  This information helps Gemini produce more accurate and environment-aware explanations but is not required.
+- `context`: A JSON object with metadata such as host, pod, cluster, region, or trace ID
 
-If `context` is omitted, the service still functions normally.
-
----
-
-### Example Without Context
+Example without context:
 
 ```json
 {
@@ -120,7 +124,7 @@ If `context` is omitted, the service still functions normally.
 }
 ```
 
-### Example With Context
+Example with context:
 
 ```json
 {
@@ -135,44 +139,19 @@ If `context` is omitted, the service still functions normally.
 
 ---
 
-### Example Response
-
-```json
-{
-  "status": "OK",
-  "result": {
-    "summary": "The 'auth-service' rejected a login attempt from user 'alice' because the provided credentials were unauthorized (HTTP 401).",
-    "severity": "ERROR",
-    "component": "auth-service",
-    "probable_causes": [
-      "Incorrect credentials",
-      "Account lockout",
-      "Malformed or expired token"
-    ],
-    "recommended_actions": [
-      "Verify credentials",
-      "Check account status",
-      "Investigate potential auth token problems"
-    ],
-    "raw_log": "2025-11-14T03:21:15Z ERROR auth-service Failed login for user alice (401)"
-  }
-}
-```
-
----
-
 ## Understanding the `context` Field
 
-The `context` field provides additional signals that help Gemini produce richer, more accurate explanations. Examples of useful metadata:
+The `context` field is optional.  
+When present, it provides additional signals that help Gemini generate more accurate and environment-aware explanations.
 
-- Host or node  
-- Kubernetes pod name  
-- Cluster or namespace  
-- Region or deployment environment  
-- Trace or request ID  
-- Application version
+Useful context fields may include:
 
-This information is optional. When supplied, it improves the model’s ability to reason about the environment where the log was produced.
+- Host or node name  
+- Kubernetes pod  
+- Cluster / namespace  
+- Region  
+- Request ID / trace ID  
+- Deployment version  
 
 Example:
 
@@ -186,33 +165,71 @@ Example:
 }
 ```
 
-If omitted, the model relies solely on the log line to generate the explanation.
+If omitted, the model relies solely on the log line.
+
+---
+
+## Example Response
+
+```json
+{
+  "status": "OK",
+  "result": {
+    "summary": "The 'auth-service' rejected a login attempt from user 'alice' because the provided credentials were unauthorized (HTTP 401).",
+    "severity": "ERROR",
+    "component": "auth-service",
+    "probable_causes": [
+      "Incorrect credentials",
+      "Locked or disabled account",
+      "Malformed or expired token"
+    ],
+    "recommended_actions": [
+      "Verify credentials",
+      "Check account status",
+      "Inspect authentication tokens"
+    ],
+    "raw_log": "2025-11-14T03:21:15Z ERROR auth-service Failed login for user alice (401)"
+  }
+}
+```
+
+---
+
+## Built-In Test UI
+
+The test UI is a small React page served from the `/` route via Flask.  
+It provides fields for:
+
+- Log entry  
+- Optional context  
+- JSON output display  
+
+It requires no separate deployment and runs inside the same container as the API.
+
+Open it locally or on Cloud Run:
+
+```
+https://<cloud-run-service-url>/
+```
 
 ---
 
 ## Docker Deployment
 
-Build the container:
+Build:
 
 ```bash
 docker build -t lucidlog-api .
 ```
 
-Run the container:
+Run locally:
 
 ```bash
-docker run -e GEMINI_API_KEY="your-real-key" -p 8080:8080 lucidlog-api
+docker run -e GEMINI_API_KEY="your-key" -p 8080:8080 lucidlog-api
 ```
 
----
+Deploy to Cloud Run:
 
-## Project Structure
-
-```
-.
-├── app.py
-├── helpers.py
-├── requirements.txt
-├── Dockerfile
-└── README.md
+```bash
+gcloud run deploy lucidlog-api   --image gcr.io/PROJECT_ID/lucidlog-api   --region us-west1   --allow-unauthenticated
 ```

@@ -174,6 +174,9 @@ def explain_log():
     except Exception as e:
         return rest_error(f"Gemini API error: {e}")
 
+@app.route("/")
+def root():
+    return app.send_static_file("index.html")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
