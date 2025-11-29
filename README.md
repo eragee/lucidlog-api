@@ -13,19 +13,22 @@ A simple in-browser UI is included and served directly by Flask from the `static
 - Included test UI served from the same Cloud Run service
 - Single-container deployment (Flask + static UI)
 - API key stored securely via Cloud Run or Secret Manager
+- Automated tests using `pytest` with mocked Gemini calls
 
 ---
 
 ## Project Structure
 
-```
+```text
 .
 ├── app.py
 ├── helpers.py
 ├── requirements.txt
 ├── Dockerfile
-└── static/
-    └── index.html     ← Test UI (React SPA)
+├── static/
+│   └── index.html     ← Test UI (React SPA)
+└── tests/
+    └── test_app.py    ← Unit tests for /explain-log
 ```
 
 Flask serves both API endpoints and the UI:
@@ -98,7 +101,7 @@ python app.py
 
 Open the built-in UI at:
 
-```
+```text
 http://localhost:8080
 ```
 
@@ -202,17 +205,50 @@ It provides fields for:
 
 - Log entry  
 - Optional context  
-- JSON output display  
+- JSON output display in a structured HTML layout  
 
 It requires no separate deployment and runs inside the same container as the API.
 
 Open it locally or on Cloud Run:
 
-```
+```text
 https://<cloud-run-service-url>/
 ```
 
 ---
+
+## Running Unit Tests
+
+Unit tests are written using `pytest` and live in the `tests/` directory.  
+The Gemini API client is mocked so no real network calls are made.
+
+### Install test dependencies
+
+If `pytest` is listed in `requirements.txt`, install as usual:
+
+```bash
+pip install -r requirements.txt
+```
+
+Otherwise, install directly:
+
+```bash
+pip install pytest
+```
+
+### Run all tests from the command line
+
+From the project root:
+
+```bash
+pytest
+```
+
+or explicitly via Python:
+
+```bash
+python -m pytest
+```
 
 ## Docker Deployment
 
