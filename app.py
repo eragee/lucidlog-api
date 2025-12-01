@@ -1,16 +1,14 @@
 import os
 import json
 
-from flask import Flask, request
+from flask import Flask, request, Response
 from helpers import rest_response, rest_error
 
 from google import genai
 
 app = Flask(__name__)
-app.config["JSON_SORT_KEYS"] = False
 
 # Client for Gemini Developer API.
-# GEMINI_API_KEY is expected in the environment.
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")
 )
@@ -46,7 +44,7 @@ def build_prompt(log_entry: str, context: dict | None) -> str:
         LOG_EXPLAINER_INSTRUCTIONS.strip(),
         "",
         "LOG ENTRY:",
-        log_entry,
+        str(log_entry),
     ]
 
     if context:
@@ -134,7 +132,6 @@ def parse_json_from_response(text: str, log_entry: str, debug_meta: dict | None 
     obj.setdefault("raw_log", log_entry)
 
     if debug_meta is not None:
-        # Attach debug only when present and not already in the object.
         obj.setdefault("_debug", debug_meta)
 
     return obj
@@ -159,7 +156,6 @@ def explain_log():
 
         raw_text = extract_text_from_response(response)
 
-        # Optional debug information when there is no text.
         debug_meta = None
         if not raw_text:
             debug_meta = {
@@ -174,9 +170,131 @@ def explain_log():
     except Exception as e:
         return rest_error(f"Gemini API error: {e}")
 
+
+# Serve the React-based test UI from static/index.html
 @app.route("/")
 def root():
     return app.send_static_file("index.html")
+
+
+# OpenAPI description (minimal but useful)
+openapi_spec = {
+    "openapi": "3.1.0",
+    "info": {
+        "title": "lucidlog-api",
+        "version": "1.0.0",
+        "description": "LLM-powered log explanation service backed by Gemini Pro."
+    },
+    "paths": {
+        "/explain-log": {
+            "post": {
+                "summary": "Explain a single log entry",
+                "operationId": "explainLog",
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ExplainLogRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful explanation",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ExplainLogResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input or upstream error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ExplainLogResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "ExplainLogRequest": {
+                "type": "object",
+                "required": ["log"],
+                "properties": {
+                    "log": {
+                        "type": "string",
+                        "description": "Single log line to explain."
+                    },
+                    "context": {
+                        "type": "object",
+                        "description": "Optional contextual metadata (host, pod, cluster, trace ID, etc.).",
+                        "additionalProperties": True
+                    }
+                }
+            },
+            "ExplainLogResult": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "severity": {"type": "string"},
+                    "component": {
+                        "type": ["string", "null"]
+                    },
+                    "probable_causes": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "recommended_actions": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "raw_log": {"type": "string"},
+                    "_debug": {
+                        "type": "object",
+                        "description": "Optional diagnostic information for debugging model responses.",
+                        "additionalProperties": True
+                    }
+                },
+                "required": ["summary", "severity", "component", "probable_causes", "recommended_actions", "raw_log"]
+            },
+            "ExplainLogResponse": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["OK", "ERROR"]
+                    },
+                    "result": {
+                        "oneOf": [
+                            {"$ref": "#/components/schemas/ExplainLogResult"},
+                            {"type": "string"}
+                        ]
+                    }
+                },
+                "required": ["status", "result"]
+            }
+        }
+    }
+}
+
+
+@app.route("/openapi.json", methods=["GET"])
+def openapi_json():
+    return Response(
+        json.dumps(openapi_spec),
+        mimetype="application/json"
+    )
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))

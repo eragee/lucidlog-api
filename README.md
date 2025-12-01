@@ -14,6 +14,7 @@ A simple in-browser UI is included and served directly by Flask from the `static
 - Single-container deployment (Flask + static UI)
 - API key stored securely via Cloud Run or Secret Manager
 - Automated tests using `pytest` with mocked Gemini calls
+- OpenAPI description exposed at `/openapi.json`
 
 ---
 
@@ -35,6 +36,7 @@ Flask serves both API endpoints and the UI:
 
 - `/` → test UI  
 - `/explain-log` → JSON API endpoint  
+- `/openapi.json` → OpenAPI description of the API  
 
 ---
 
@@ -142,33 +144,74 @@ Example with context:
 
 ---
 
-## Understanding the `context` Field
+## Response Schema
 
-The `context` field is optional.  
-When present, it provides additional signals that help Gemini generate more accurate and environment-aware explanations.
-
-Useful context fields may include:
-
-- Host or node name  
-- Kubernetes pod  
-- Cluster / namespace  
-- Region  
-- Request ID / trace ID  
-- Deployment version  
-
-Example:
+All responses from `/explain-log` follow a wrapper structure:
 
 ```json
 {
-  "context": {
-    "host": "node-17",
-    "cluster": "prod-gke-1",
-    "trace_id": "df102abf34"
-  }
+  "status": "OK" | "ERROR",
+  "result": { ... }
 }
 ```
 
-If omitted, the model relies solely on the log line.
+### Success (`status: "OK"`)
+
+For successful explanations, `result` is an object with the following fields:
+
+```json
+{
+  "summary": "string",
+  "severity": "string",
+  "component": "string or null",
+  "probable_causes": ["string", "..."],
+  "recommended_actions": ["string", "..."],
+  "raw_log": "string"
+}
+```
+
+- `summary`  
+  High-level natural language explanation of what the log line represents.
+
+- `severity`  
+  Normalized severity inferred from the log, typically one of: `ERROR`, `WARN`, `INFO`.  
+  The value is not strictly enforced, so other strings are possible.
+
+- `component`  
+  The logical component or service inferred from the log (for example, `auth-service`, `gateway`).  
+  May be `null` if no component can be inferred.
+
+- `probable_causes`  
+  Array of strings. Each entry describes a plausible cause for the event described by the log.
+
+- `recommended_actions`  
+  Array of strings. Each entry describes a concrete step that may help investigate or resolve the issue.
+
+- `raw_log`  
+  Echo of the original log line that was sent in the request, or a close approximation when the model response is used directly.
+
+Additional internal fields may appear in some edge cases:
+
+- `_debug` (optional)  
+  Present only when the service attaches diagnostic information for empty or blocked model responses.  
+  This field is not intended for consumers in production use.
+
+### Error (`status: "ERROR"`)
+
+For error responses (validation errors, upstream failures, etc.), `result` is a human-readable message string:
+
+```json
+{
+  "status": "ERROR",
+  "result": "Gemini API error: Upstream timeout"
+}
+```
+
+Clients can rely on:
+
+- `status` always being present and equal to `"OK"` or `"ERROR"`.  
+- When `status === "OK"`, `result` being a structured explanation object.  
+- When `status === "ERROR"`, `result` being an error message.
 
 ---
 
@@ -205,7 +248,7 @@ It provides fields for:
 
 - Log entry  
 - Optional context  
-- JSON output display in a structured HTML layout  
+- JSON output formatted into readable sections (summary, severity, component, probable causes, recommended actions, raw log)  
 
 It requires no separate deployment and runs inside the same container as the API.
 
@@ -249,6 +292,34 @@ or explicitly via Python:
 ```bash
 python -m pytest
 ```
+
+### Running tests in PyCharm
+
+1. Open the project in PyCharm.  
+2. Ensure the project interpreter has `pytest` installed.  
+3. Right-click the `tests/` folder → **Run 'pytest in tests'**.  
+
+Individual tests can be run by clicking the gutter icon next to a test function in `test_app.py`.
+
+---
+
+## OpenAPI Description
+
+An OpenAPI description of the service is exposed at:
+
+```text
+/openapi.json
+```
+
+This document describes:
+
+- Request schema for `POST /explain-log`
+- Wrapper response structure (`status`, `result`)
+- Explanation result fields (summary, severity, component, probable_causes, recommended_actions, raw_log)
+
+It can be used with tools such as Swagger UI or Postman to explore the API.
+
+---
 
 ## Docker Deployment
 
