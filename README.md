@@ -15,6 +15,7 @@ A simple in-browser UI is included and served directly by Flask from the `static
 - API key stored securely via Cloud Run or Secret Manager
 - Automated tests using `pytest` with mocked Gemini calls
 - OpenAPI description exposed at `/openapi.json`
+- Structured logging for observability (request id, latency, model, status)
 
 ---
 
@@ -166,7 +167,7 @@ python -m pytest
 
 ### PyCharm
 
-Right‑click the `tests/` folder → **Run 'pytest in tests'**.
+Right-click the `tests/` folder → **Run 'pytest in tests'**.
 
 ---
 
@@ -260,7 +261,7 @@ Includes fields for:
 
 - Log entry  
 - Optional context  
-- Pretty‑formatted explanation output  
+- Pretty-formatted explanation output  
 
 ---
 
@@ -279,6 +280,41 @@ Contains:
 - Error schema  
 
 Works with Swagger UI, Postman, etc.
+
+---
+
+## Observability and Structured Logging
+
+The service emits structured logs as single-line JSON objects to standard output.  
+Each `/explain-log` request produces a log entry that includes fields such as:
+
+- `request_id`: Unique identifier for the request  
+- `path`: Request path (for example, `/explain-log`)  
+- `method`: HTTP method (for example, `POST`)  
+- `status`: `"OK"` or `"ERROR"` based on the wrapper response  
+- `model`: Model name used for the call (for example, `gemini-2.5-pro`)  
+- `latency_ms`: End-to-end handler latency in milliseconds  
+- `error`: Optional error message when an exception occurs  
+
+These logs are:
+
+- Printed to stdout, which Cloud Run and GCP Logging automatically collect.  
+- Easy to parse in tools such as GCP Logs Explorer, ELK, or any JSON log pipeline.  
+
+Example structured log line:
+
+```json
+{
+  "request_id": "a8f0a7f2-1c1c-4c29-8d5c-4b2c4454b123",
+  "path": "/explain-log",
+  "method": "POST",
+  "status": "OK",
+  "model": "gemini-2.5-pro",
+  "latency_ms": 87.3
+}
+```
+
+This makes it straightforward to build dashboards, alerts, or traces around latency, error rates, and model usage.
 
 ---
 

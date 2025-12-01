@@ -1,17 +1,34 @@
 import os
 import json
+import time
+import uuid
+import logging
 
 from flask import Flask, request, Response
 from helpers import rest_response, rest_error
-
 from google import genai
 
 app = Flask(__name__)
 
-# Client for Gemini Developer API.
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
+# ---------------------------------------------------------------------------
+# Logging configuration
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger("lucidlog")
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    # Formatter prints only the message, which in this case is JSON
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+# ---------------------------------------------------------------------------
+# Gemini client
+# ---------------------------------------------------------------------------
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+MODEL_NAME = "gemini-2.5-pro"
 
 LOG_EXPLAINER_INSTRUCTIONS = """
 You are a senior SRE helping a developer understand log entries.
@@ -108,7 +125,6 @@ def parse_json_from_response(text: str, log_entry: str, debug_meta: dict | None 
 
     cleaned = text.strip()
 
-    # Strip ```json ... ``` or ``` ... ``` fences if present
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
         if len(lines) >= 2:
@@ -139,18 +155,24 @@ def parse_json_from_response(text: str, log_entry: str, debug_meta: dict | None 
 
 @app.route("/explain-log", methods=["POST"])
 def explain_log():
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
+    status_label = "OK"
+    error_message = None
+
     body = request.get_json(silent=True) or {}
     log_entry = body.get("log")
     context = body.get("context")
 
-    if not log_entry:
-        return rest_error("Missing 'log' field in JSON body")
-
     try:
+        if not log_entry:
+            status_label = "ERROR"
+            return rest_error("Missing 'log' field in JSON body")
+
         prompt = build_prompt(log_entry, context)
 
         response = client.models.generate_content(
-            model="gemini-2.5-pro",
+            model=MODEL_NAME,
             contents=prompt,
         )
 
@@ -168,16 +190,31 @@ def explain_log():
         return rest_response(parsed)
 
     except Exception as e:
+        status_label = "ERROR"
+        error_message = str(e)
         return rest_error(f"Gemini API error: {e}")
 
+    finally:
+        latency_ms = (time.time() - start_time) * 1000.0
+        log_record = {
+            "request_id": request_id,
+            "path": request.path,
+            "method": request.method,
+            "status": status_label,
+            "model": MODEL_NAME,
+            "latency_ms": round(latency_ms, 2),
+        }
+        if error_message:
+            log_record["error"] = error_message
 
-# Serve the React-based test UI from static/index.html
+        logger.info(json.dumps(log_record))
+
+
 @app.route("/")
 def root():
     return app.send_static_file("index.html")
 
 
-# OpenAPI description (minimal but useful)
 openapi_spec = {
     "openapi": "3.1.0",
     "info": {
