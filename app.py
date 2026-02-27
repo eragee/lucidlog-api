@@ -27,8 +27,10 @@ if not logger.handlers:
 # Gemini client
 # ---------------------------------------------------------------------------
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 MODEL_NAME = "gemini-2.5-pro"
+MAX_LOG_CHARS = 4000
 
 LOG_EXPLAINER_INSTRUCTIONS = """
 You are a senior SRE helping a developer understand log entries.
@@ -153,6 +155,49 @@ def parse_json_from_response(text: str, log_entry: str, debug_meta: dict | None 
     return obj
 
 
+def validate_request_payload(body: dict) -> tuple[str | None, dict | None, str | None]:
+    """Validates request JSON and returns (log_entry, context, error_message)."""
+    log_entry = body.get("log")
+    context = body.get("context")
+
+    if log_entry is None:
+        return None, None, "Missing 'log' field in JSON body"
+
+    if not isinstance(log_entry, str) or not log_entry.strip():
+        return None, None, "'log' must be a non-empty string"
+
+    if len(log_entry) > MAX_LOG_CHARS:
+        return None, None, f"'log' must be <= {MAX_LOG_CHARS} characters"
+
+    if context is not None and not isinstance(context, dict):
+        return None, None, "'context' must be a JSON object when provided"
+
+    return log_entry.strip(), context, None
+
+
+def normalize_result_shape(obj: dict, log_entry: str) -> dict:
+    """Ensures model output always matches the public response schema types."""
+    summary = obj.get("summary")
+    severity = obj.get("severity")
+    component = obj.get("component")
+    probable_causes = obj.get("probable_causes")
+    recommended_actions = obj.get("recommended_actions")
+
+    normalized = {
+        "summary": summary if isinstance(summary, str) and summary else "No summary provided.",
+        "severity": severity if isinstance(severity, str) and severity else "INFO",
+        "component": component if isinstance(component, str) or component is None else None,
+        "probable_causes": probable_causes if isinstance(probable_causes, list) else [],
+        "recommended_actions": recommended_actions if isinstance(recommended_actions, list) else [],
+        "raw_log": log_entry,
+    }
+
+    if "_debug" in obj:
+        normalized["_debug"] = obj["_debug"]
+
+    return normalized
+
+
 @app.route("/explain-log", methods=["POST"])
 def explain_log():
     request_id = str(uuid.uuid4())
@@ -161,13 +206,16 @@ def explain_log():
     error_message = None
 
     body = request.get_json(silent=True) or {}
-    log_entry = body.get("log")
-    context = body.get("context")
+    log_entry, context, validation_error = validate_request_payload(body)
 
     try:
-        if not log_entry:
+        if validation_error:
             status_label = "ERROR"
-            return rest_error("Missing 'log' field in JSON body")
+            return rest_error(validation_error)
+
+        if not client:
+            status_label = "ERROR"
+            return rest_error("Server missing GEMINI_API_KEY configuration")
 
         prompt = build_prompt(log_entry, context)
 
@@ -186,6 +234,7 @@ def explain_log():
             }
 
         parsed = parse_json_from_response(raw_text, log_entry, debug_meta=debug_meta)
+        parsed = normalize_result_shape(parsed, log_entry)
 
         return rest_response(parsed)
 
@@ -215,6 +264,16 @@ def root():
     return app.send_static_file("index.html")
 
 
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return rest_response({
+        "service": "lucidlog-api",
+        "status": "healthy",
+        "gemini_configured": bool(GEMINI_API_KEY),
+        "model": MODEL_NAME,
+    })
+
+
 openapi_spec = {
     "openapi": "3.1.0",
     "info": {
@@ -223,6 +282,17 @@ openapi_spec = {
         "description": "LLM-powered log explanation service backed by Gemini Pro."
     },
     "paths": {
+        "/healthz": {
+            "get": {
+                "summary": "Service health check",
+                "operationId": "healthz",
+                "responses": {
+                    "200": {
+                        "description": "Service health status"
+                    }
+                }
+            }
+        },
         "/explain-log": {
             "post": {
                 "summary": "Explain a single log entry",
@@ -270,11 +340,12 @@ openapi_spec = {
                 "properties": {
                     "log": {
                         "type": "string",
+                        "maxLength": MAX_LOG_CHARS,
                         "description": "Single log line to explain."
                     },
                     "context": {
                         "type": "object",
-                        "description": "Optional contextual metadata (host, pod, cluster, trace ID, etc.).",
+                        "description": "Optional contextual metadata (host, pod, cluster, trace ID, etc.). Must be a JSON object.",
                         "additionalProperties": True
                     }
                 }
